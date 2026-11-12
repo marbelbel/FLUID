@@ -7,6 +7,9 @@ jobs:
   build-freebsd-iso:
     runs-on: ubuntu-latest
     steps:
+      - name: Preparar archivos del repositorio
+        uses: actions/checkout@v4
+
       - name: Ejecutar construcción dentro de FreeBSD 14.2
         uses: vmactions/freebsd-vm@v1
         with:
@@ -14,11 +17,9 @@ jobs:
           mem: 4G
           usesh: true
           run: |
-            mkdir -p /root/proyecto
-            cd /root/proyecto
-            fetch -o repo.zip "https://github.com"
-            tar -xf repo.zip
-            cd FluidOs-main
+            RUTA=$(find / -name "build-os.sh" 2>/dev/null | head -n 1 | xargs dirname)
+            echo "Carpeta encontrada en: $RUTA"
+            cd "$RUTA"
             sed -i '' 's/\r$//' *.sh
             chmod +x *.sh
             ./build-os.sh
