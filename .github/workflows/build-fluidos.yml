@@ -3,6 +3,9 @@ name: Construir FluidOS ISO en la Nube
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-freebsd-iso:
     runs-on: ubuntu-latest
@@ -18,7 +21,6 @@ jobs:
           usesh: true
           run: |
             RUTA=$(find / -name "build-os.sh" 2>/dev/null | head -n 1 | xargs dirname)
-            echo "Carpeta encontrada en: $RUTA"
             cd "$RUTA"
             sed -i '' 's/\r$//' *.sh
             chmod +x *.sh
@@ -29,8 +31,10 @@ jobs:
             cp /usr/obj/*.iso /tmp/salida/ 2>/dev/null || true
             cp *.iso /tmp/salida/ 2>/dev/null || true
 
-      - name: Subir archivo FluidOS.iso resultante
-        uses: actions/upload-artifact@v4
+      - name: Publicar FluidOS.iso en Lanzamientos (hasta 2 GB gratis)
+        uses: softprops/action-gh-release@v2
         with:
-          name: FluidOS-ISO
-          path: /tmp/salida/*.iso
+          tag_name: v1.0-beta
+          name: FluidOS 1.0 Beta ISO
+          files: /tmp/salida/*.iso
+          
