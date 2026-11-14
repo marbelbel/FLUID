@@ -48,16 +48,96 @@ jobs:
             echo "[INFO] Generando ISO..."
             ./make-iso.sh
 
-            echo "[INFO] Comprobando imagen ISO..."
+            echo "[INFO] Comprobando ISO..."
             test -s fluidos-14.0-amd64.iso
 
             ls -lh fluidos-14.0-amd64.iso
 
+      - name: Comprimir y preparar ISO para distribucion
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "[INFO] Localizando ISO..."
+
+          ISO=$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            -name "fluidos-14.0-amd64.iso" \
+            -print -quit)
+
+          test -n "$ISO"
+          test -s "$ISO"
+
+          mkdir -p "$GITHUB_WORKSPACE/release-assets"
+
+          cp "$ISO" "$GITHUB_WORKSPACE/release-assets/"
+
+          cd "$GITHUB_WORKSPACE/release-assets"
+
+          echo "[INFO] Comprimiendo FluidOS con XZ..."
+
+          xz -T0 -6 -k fluidos-14.0-amd64.iso
+
+          COMPRESSED="fluidos-14.0-amd64.iso.xz"
+
+          SIZE=$(stat -c%s "$COMPRESSED")
+          LIMIT=2147483648
+
+          echo "[INFO] Tamaño comprimido: $SIZE bytes"
+
+          echo "[INFO] Generando SHA256..."
+          sha256sum "$COMPRESSED" > "$COMPRESSED.sha256"
+
+          if [ "$SIZE" -ge "$LIMIT" ]; then
+            echo "[INFO] La ISO comprimida supera 2 GiB."
+            echo "[INFO] Dividiendo en partes compatibles con GitHub..."
+
+            split -b 1900M -d -a 3 \
+              "$COMPRESSED" \
+              "$COMPRESSED.part"
+
+            rm "$COMPRESSED"
+
+          else
+            echo "[SUCCESS] ISO comprimida compatible con GitHub."
+          fi
+
+          echo "[INFO] Archivos preparados:"
+          ls -lh
+
       - name: Publicar FluidOS en GitHub Releases
         uses: softprops/action-gh-release@v2
+
         with:
           tag_name: v1.0-beta
           name: FluidOS 1.0 Beta
+
           generate_release_notes: true
-          files: fluidos-*.iso
+
+          body: |
+            # FluidOS Beta
+
+            Primera compilacion distribuible de FluidOS.
+
+            ## Descarga
+
+            Descarga el archivo ISO.XZ.
+
+            Si la descarga está dividida en partes:
+            1. Descarga todas las partes.
+            2. Unelas en orden numerico.
+            3. Descomprime el archivo resultante con XZ.
+            4. Verifica el SHA256.
+
+            ## Verificacion
+
+            Se incluye un archivo SHA256 para comprobar
+            la integridad de la imagen.
+
+          files: |
+            release-assets/fluidos-*.iso.xz
+            release-assets/fluidos-*.iso.xz.part*
+            release-assets/fluidos-*.iso.xz.sha256
+
+          fail_on_unmatched_files: true
           
