@@ -1,0 +1,38 @@
+--- a/setup-features.sh
++++ b/setup-features.sh
+@@ -164,18 +164,17 @@
+ WAYLAND_PKGS="
+ wayland
+ wayfire
+-wf-shell
+-sfwbar
++wayfire-plugins-extra
++wcm
+ seatd
+ drm-kmod
+ xwayland
+ foot
+ grim
+ slurp
+ pamixer
+ font-awesome
+ noto-basic
+ gtk3
+-gtk4
+ evdev-proto
+ "
+@@ -354,10 +354,13 @@
+ # FINISH
+ # ==============================================================================
+ 
++log_info "Instalando interfaz propia de FluidOS..."
++sh "$(dirname "$0")/setup-desktop.sh" "$TARGET_DIR"
++
+ log_success "=============================================================="
+ log_success "FluidOS features configured successfully."
+ log_success "ZFS, Boot Environments, PF, Bonjour and Wayland configured."
+-log_success "Wayfire and SFWBar desktop configuration generated."
++log_success "Wayfire y shell propia de FluidOS configuradas."
+ log_success "=============================================================="
+ 
+ log_info "Siguiente paso: ejecutar make-iso.sh"
