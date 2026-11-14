@@ -2,47 +2,35 @@
 # Instala la shell propia de FluidOS en el sistema objetivo preparado.
 set -eu
 
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[ERROR] setup-desktop.sh debe ejecutarse como root." >&2
+    exit 1
+fi
+
 TARGET_DIR="${1:-/usr/obj/fluidos_root}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SOURCE="$SCRIPT_DIR/desktop/fluidos-shell.py"
 
-# Dependencias del shell propio: GTK3, Layer Shell y bindings Python.
-echo "[INFO] Instalando dependencias gráficas de FluidOS..."
-pkg -c "$TARGET_DIR" install -y gtk3 gtk-layer-shell python312 py312-pygobject py312-pycairo
+[ -d "$TARGET_DIR" ] || { echo "[ERROR] No existe $TARGET_DIR." >&2; exit 1; }
+[ -d "$TARGET_DIR/home/fluid" ] || { echo "[ERROR] No existe $TARGET_DIR/home/fluid. Ejecuta antes setup-features.sh." >&2; exit 1; }
+[ -f "$SOURCE" ] || { echo "[ERROR] No se encuentra $SOURCE." >&2; exit 1; }
 
-if [ "$(id -u)" -ne 0 ]; then
-    echo "[ERROR] setup-desktop.sh debe ejecutarse como root."
-    exit 1
-fi
-
-if [ ! -d "$TARGET_DIR/home/fluid" ]; then
-    echo "[ERROR] No existe $TARGET_DIR/home/fluid. Ejecuta antes setup-features.sh."
-    exit 1
-fi
-
-if [ ! -f "$SOURCE" ]; then
-    echo "[ERROR] No se encuentra $SOURCE."
-    exit 1
-fi
-
+# Las dependencias se instalan en setup-features.sh. Aqui solo se instala la shell.
 install -d -m 755 "$TARGET_DIR/usr/local/lib/fluidos"
 install -d -m 755 "$TARGET_DIR/usr/local/bin"
 install -d -m 755 "$TARGET_DIR/home/fluid/.config/wayfire"
-
 install -m 755 "$SOURCE" "$TARGET_DIR/usr/local/lib/fluidos/fluidos-shell.py"
 
-cat > "$TARGET_DIR/usr/local/bin/fluidos-shell" <<'EOF'
+cat > "$TARGET_DIR/usr/local/bin/fluidos-shell" <<'LAUNCHER_EOF'
 #!/bin/sh
 export GDK_BACKEND=wayland
 export XDG_CURRENT_DESKTOP=FluidOS
 export XDG_SESSION_DESKTOP=FluidOS
 exec /usr/local/bin/python3.12 /usr/local/lib/fluidos/fluidos-shell.py "$@"
-EOF
+LAUNCHER_EOF
 chmod 755 "$TARGET_DIR/usr/local/bin/fluidos-shell"
 
-# Wayfire queda como compositor. Los paneles, Dock, escritorio y ventanas
-# de FluidOS los dibuja fluidos-shell, no wf-shell ni sfwbar.
-cat > "$TARGET_DIR/home/fluid/.config/wayfire/wayfire.ini" <<'EOF'
+cat > "$TARGET_DIR/home/fluid/.config/wayfire/wayfire.ini" <<'WAYFIRE_EOF'
 [core]
 plugins = alpha animate autostart command decoration expo grid move place resize scale vswitch wobbly
 vwidth = 2
@@ -71,10 +59,10 @@ toggle = <super> KEY_E
 [vswitch]
 binding_left = <ctrl> <super> KEY_LEFT
 binding_right = <ctrl> <super> KEY_RIGHT
-EOF
+WAYFIRE_EOF
 
 chroot "$TARGET_DIR" chown -R fluid:wheel /home/fluid
 chroot "$TARGET_DIR" chmod 755 /home/fluid /home/fluid/.config /home/fluid/.config/wayfire
 
 echo "[SUCCESS] Shell propia de FluidOS instalada."
-echo "[INFO] Wayfire iniciará fluidos-shell y no los paneles externos."
+echo "[INFO] Wayfire iniciara fluidos-shell sin wf-shell ni sfwbar."
