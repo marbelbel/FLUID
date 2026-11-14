@@ -1,11 +1,10 @@
-
 #!/bin/sh
 # ==============================================================================
-# FluidOS - Advanced System Features Configuration
-# OpenZFS, Boot Environments, PF Firewall, Bonjour, Wayland and Wayfire
+# FluidOS - Configuracion de funciones del sistema y escritorio
+# FreeBSD 14.5-RELEASE / amd64
 # ==============================================================================
 
-set -e
+set -eu
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -13,351 +12,174 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-log_info() {
-    printf '%b[INFO]%b %s\n' "$BLUE" "$NC" "$1"
-}
+log_info()    { printf '%b[INFO]%b %s\n' "$BLUE" "$NC" "$1"; }
+log_success() { printf '%b[OK]%b %s\n' "$GREEN" "$NC" "$1"; }
+log_warn()    { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"; }
+log_error()   { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1" >&2; exit 1; }
 
-log_success() {
-    printf '%b[SUCCESS]%b %s\n' "$GREEN" "$NC" "$1"
-}
-
-log_warn() {
-    printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"
-}
-
-log_error() {
-    printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1"
-    exit 1
-}
-
-if [ "$(id -u)" -ne 0 ]; then
-    log_error "Este script debe ejecutarse como root."
-fi
+[ "$(id -u)" -eq 0 ] || log_error "Ejecuta este script como root."
 
 TARGET_DIR="${1:-/usr/obj/fluidos_root}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+DESKTOP_SETUP="$SCRIPT_DIR/setup-desktop.sh"
 
-if [ ! -d "$TARGET_DIR" ]; then
-    log_error "No existe el sistema objetivo: $TARGET_DIR"
-fi
+[ -d "$TARGET_DIR" ] || log_error "No existe el sistema objetivo: $TARGET_DIR"
+[ -x "$TARGET_DIR/bin/sh" ] || log_error "El destino no parece contener un FreeBSD instalado: falta /bin/sh. Ejecuta antes build-os.sh."
+[ -f "$TARGET_DIR/etc/master.passwd" ] || log_error "Falta etc/master.passwd en el destino. Comprueba la extraccion de base.txz."
+[ -f "$DESKTOP_SETUP" ] || log_error "No se encuentra setup-desktop.sh junto a este archivo."
 
-log_info "Configurando FluidOS en: $TARGET_DIR"
+log_info "Configurando FluidOS en $TARGET_DIR"
+
+mkdir -p "$TARGET_DIR/usr/local/bin" \
+         "$TARGET_DIR/usr/local/etc" \
+         "$TARGET_DIR/etc" \
+         "$TARGET_DIR/home"
 
 # ==============================================================================
-# 1. OPENZFS AND BOOT ENVIRONMENTS
+# 1. OPENZFS Y HERRAMIENTA DE ACTUALIZACION
 # ==============================================================================
 
-log_info "[1/4] Configurando OpenZFS y Boot Environments..."
-
+log_info "[1/4] Configurando ZFS y Boot Environments..."
 sysrc -R "$TARGET_DIR" zfs_enable="YES"
 
-mkdir -p "$TARGET_DIR/usr/local/bin"
-
-cat <<'EOF' > "$TARGET_DIR/usr/local/bin/fluidos-update"
+cat > "$TARGET_DIR/usr/local/bin/fluidos-update" <<'UPDATE_EOF'
 #!/bin/sh
+set -eu
 
-# FluidOS Atomic Update System
-
-set -e
-
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-NEW_BE="FluidOS-Update-${TIMESTAMP}"
-
-echo "==> Creating Boot Environment: $NEW_BE"
-
-bectl create "$NEW_BE"
-
-echo "==> Mounting new Boot Environment..."
-
-MOUNT_POINT=$(bectl mount "$NEW_BE")
-
-cleanup() {
-    bectl unmount "$NEW_BE" 2>/dev/null || true
-    bectl destroy -f "$NEW_BE" 2>/dev/null || true
-}
-
-echo "==> Updating packages..."
-
-if ! pkg -r "$MOUNT_POINT" upgrade -y; then
-    echo "Update failed. Removing temporary Boot Environment."
-    cleanup
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[ERROR] Ejecuta fluidos-update como root." >&2
     exit 1
 fi
 
-echo "==> Activating new Boot Environment..."
+command -v bectl >/dev/null 2>&1 || {
+    echo "[ERROR] bectl no esta disponible en este sistema." >&2
+    exit 1
+}
 
+STAMP="$(date +%Y%m%d_%H%M%S)"
+NEW_BE="FluidOS-Update-${STAMP}"
+MOUNT_POINT=""
+
+cleanup() {
+    if [ -n "$MOUNT_POINT" ]; then
+        bectl unmount "$NEW_BE" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+
+echo "==> Creando Boot Environment: $NEW_BE"
+bectl create "$NEW_BE"
+echo "==> Montando Boot Environment..."
+MOUNT_POINT="$(bectl mount "$NEW_BE")"
+
+[ -n "$MOUNT_POINT" ] || {
+    echo "[ERROR] No se pudo montar el Boot Environment." >&2
+    bectl destroy -F "$NEW_BE" >/dev/null 2>&1 || true
+    exit 1
+}
+
+echo "==> Actualizando paquetes en el nuevo entorno..."
+if ! pkg -r "$MOUNT_POINT" upgrade -y; then
+    echo "[ERROR] La actualizacion fallo. El entorno nuevo no se activara." >&2
+    cleanup
+    bectl destroy -F "$NEW_BE" >/dev/null 2>&1 || true
+    exit 1
+fi
+
+cleanup
+MOUNT_POINT=""
+echo "==> Activando $NEW_BE"
 bectl activate "$NEW_BE"
+echo "Actualizacion preparada. Reinicia para arrancar el nuevo entorno."
+UPDATE_EOF
 
-echo "Update completed."
-echo "Restart the computer to use the new environment."
-EOF
-
-chmod +x "$TARGET_DIR/usr/local/bin/fluidos-update"
-
-log_success "OpenZFS y herramientas de actualización configuradas."
+chmod 755 "$TARGET_DIR/usr/local/bin/fluidos-update"
+log_success "Herramienta fluidos-update instalada."
 
 # ==============================================================================
-# 2. NETWORK, PF FIREWALL AND BONJOUR
+# 2. RED, PF Y BONJOUR
 # ==============================================================================
 
-log_info "[2/4] Configurando red, PF y Bonjour..."
-
+log_info "[2/4] Configurando red, PF y servicios de red..."
 sysrc -R "$TARGET_DIR" ifconfig_DEFAULT="DHCP"
 sysrc -R "$TARGET_DIR" pf_enable="YES"
 sysrc -R "$TARGET_DIR" pf_rules="/etc/pf.conf"
 sysrc -R "$TARGET_DIR" pflog_enable="YES"
 
-cat <<'EOF' > "$TARGET_DIR/etc/pf.conf"
-# ==============================================================================
-# FluidOS PF Firewall
-# ==============================================================================
-
-ext_if = egress
-
-table <badhosts> persist
-
+cat > "$TARGET_DIR/etc/pf.conf" <<'PF_EOF'
+# Firewall base de FluidOS.
 set skip on lo0
 set block-policy drop
-set loginterface $ext_if
-set reassemble yes
-
-scrub in all fragment reassemble
-
-# Default stateful firewall policy
+scrub in all
 block in all
 pass out all keep state
 
-# Bonjour / mDNS
-pass in proto udp to any port 5353 keep state
-pass out proto udp to any port 5353 keep state
+# mDNS / Bonjour en la red local.
+pass in  proto udp from any to any port 5353 keep state
+pass out proto udp from any to any port 5353 keep state
 
-# Controlled ICMP
+# Respuestas a ping IPv4.
 pass in inet proto icmp all icmp-type echoreq keep state
-EOF
+PF_EOF
 
-log_info "Instalando Avahi, NSS mDNS y DBus..."
-
-if ! pkg -c "$TARGET_DIR" install -y avahi-app nss_mdns dbus; then
-    log_warn "No se pudieron instalar todos los paquetes Bonjour."
-fi
-
-sysrc -R "$TARGET_DIR" dbus_enable="YES"
-sysrc -R "$TARGET_DIR" avahi_daemon_enable="YES"
-
-if [ -f "$TARGET_DIR/etc/nsswitch.conf" ]; then
-    if ! grep -q 'mdns' "$TARGET_DIR/etc/nsswitch.conf"; then
-        sed -i '' \
-            's/hosts: files dns/hosts: files dns mdns/' \
-            "$TARGET_DIR/etc/nsswitch.conf"
+if pkg -r "$TARGET_DIR" install -y avahi-app nss_mdns; then
+    sysrc -R "$TARGET_DIR" avahi_daemon_enable="YES"
+    if [ -f "$TARGET_DIR/etc/nsswitch.conf" ] && ! grep -q 'mdns' "$TARGET_DIR/etc/nsswitch.conf"; then
+        sed -i '' 's/^hosts:[[:space:]]*files dns/hosts: files dns mdns/' "$TARGET_DIR/etc/nsswitch.conf"
     fi
+    log_success "Avahi y mDNS instalados."
+else
+    log_warn "Avahi/mDNS no se pudo instalar; se continua sin Bonjour."
 fi
 
-log_success "PF y Bonjour configurados."
+if pkg -r "$TARGET_DIR" install -y dbus; then
+    sysrc -R "$TARGET_DIR" dbus_enable="YES"
+else
+    log_error "No se pudo instalar DBus, necesario para el escritorio."
+fi
+
+log_success "Red y firewall configurados."
 
 # ==============================================================================
-# 3. WAYLAND, WAYFIRE AND GRAPHICAL ENVIRONMENT
+# 3. WAYLAND, WAYFIRE Y USUARIO
 # ==============================================================================
 
-log_info "[3/4] Instalando entorno gráfico Wayland..."
+log_info "[3/4] Instalando Wayland y Wayfire..."
 
-# Paquetes principales.
-# light se omite porque no está disponible en el repositorio utilizado.
-WAYLAND_PKGS="
-wayland
-wayfire
-wf-shell
-sfwbar
-seatd
-drm-kmod
-xwayland
-foot
-grim
-slurp
-pamixer
-font-awesome
-noto-basic
-gtk3
-gtk4
-evdev-proto
-"
+GRAPHICS_PACKAGES="wayland wayfire seatd drm-kmod xwayland foot gtk3 gtk-layer-shell python312 py312-pygobject py312-pycairo"
 
-if ! pkg -c "$TARGET_DIR" install -y $WAYLAND_PKGS; then
-    log_warn "Fallo parcial instalando paquetes gráficos."
+if ! pkg -r "$TARGET_DIR" install -y $GRAPHICS_PACKAGES; then
+    log_error "Fallo la instalacion de paquetes graficos. Revisa el log de pkg y los nombres disponibles para FreeBSD 14.5."
 fi
 
 sysrc -R "$TARGET_DIR" seatd_enable="YES"
 sysrc -R "$TARGET_DIR" kld_list="i915kms amdgpu"
 
-# ------------------------------------------------------------------------------
-# Create video group if missing
-# ------------------------------------------------------------------------------
-
-log_info "Comprobando grupos del sistema..."
-
+log_info "Preparando grupos y usuario fluid..."
 if ! chroot "$TARGET_DIR" pw group show video >/dev/null 2>&1; then
     chroot "$TARGET_DIR" pw groupadd video
 fi
 
-# ------------------------------------------------------------------------------
-# Create FluidOS desktop user
-# ------------------------------------------------------------------------------
-
-log_info "Creando usuario FluidOS..."
-
 if ! chroot "$TARGET_DIR" pw user show fluid >/dev/null 2>&1; then
-
     chroot "$TARGET_DIR" pw useradd fluid \
-        -m \
-        -g wheel \
-        -G video \
-        -s /bin/sh \
+        -m -g wheel -G video -s /bin/sh \
         -c "FluidOS Desktop User"
-
-    printf '%s\n' "fluidos" |
-        chroot "$TARGET_DIR" pw usermod fluid -h 0
-
+    printf '%s\n' 'fluidos' | chroot "$TARGET_DIR" pw usermod fluid -h 0
 else
-
-    log_info "El usuario fluid ya existe."
-
-    chroot "$TARGET_DIR" pw usermod fluid -G video
-
+    chroot "$TARGET_DIR" pw usermod fluid -G video,wheel
 fi
 
-log_success "Usuario fluid configurado correctamente."
-
 # ==============================================================================
-# 4. FLUIDOS DESKTOP CONFIGURATION
+# 4. SHELL PROPIA DE FLUIDOS
 # ==============================================================================
 
-log_info "[4/4] Configurando escritorio FluidOS..."
+log_info "[4/4] Instalando la interfaz propia de FluidOS..."
 
-USER_HOME="$TARGET_DIR/home/fluid"
-
-mkdir -p "$USER_HOME/.config/wayfire"
-mkdir -p "$USER_HOME/.config/sfwbar"
-
-# ------------------------------------------------------------------------------
-# Wayfire configuration
-# ------------------------------------------------------------------------------
-
-cat <<'EOF' > "$USER_HOME/.config/wayfire/wayfire.ini"
-[core]
-plugins = autostart alpha animate blur expo firedecor grid move resize place window-rules wobbly scale
-
-close_top_window = <super> KEY_Q
-
-vwidth = 2
-vheight = 2
-
-[autostart]
-0_environment = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=Wayfire
-1_sfwbar = sfwbar
-2_background = wayfire-bg
-
-[animate]
-open_animation = zoom
-close_animation = fade
-duration = 300
-
-[wobbly]
-friction = 3.0
-spring_k = 8.0
-
-[expo]
-toggle = <super> KEY_E
-
-[scale]
-toggle = <super> KEY_V
-
-[window-rules]
-rule_1 = on created if app_id contains "foot" then maximize
-EOF
-
-# ------------------------------------------------------------------------------
-# SFWBar top bar and dock
-# ------------------------------------------------------------------------------
-
-cat <<'EOF' > "$USER_HOME/.config/sfwbar/sfwbar.config"
-# FluidOS Desktop Interface
-
-include("winops.widget")
-
-target "top-bar" {
-    layout = top
-    height = 28
-    style = "topbar"
-
-    item "logo" {
-        icon = "distributor-logo-freebsd"
-        action = "sfwbar-menu"
-    }
-
-    item "taskbar" {
-        type = taskbar
-        labels = true
-    }
-
-    item "spacer" {
-        type = flex
-    }
-
-    item "clock" {
-        type = clock
-        format = "%a %b %d %H:%M"
-    }
-}
-
-target "dock" {
-    layout = bottom
-    height = 56
-    style = "mac-dock"
-
-    item "launcher-term" {
-        icon = "utilities-terminal"
-        action = "foot"
-    }
-
-    item "launcher-files" {
-        icon = "system-file-manager"
-        action = "foot -e netrik"
-    }
-}
-
-css {
-    .topbar {
-        background-color: rgba(30, 30, 30, 0.85);
-        color: #ffffff;
-        font-family: "Noto Sans", sans-serif;
-        font-size: 13px;
-    }
-
-    .mac-dock {
-        background-color: rgba(255, 255, 255, 0.25);
-        border-radius: 16px;
-        margin: 6px;
-    }
-}
-EOF
-
-# ------------------------------------------------------------------------------
-# Permissions
-# ------------------------------------------------------------------------------
-
-chroot "$TARGET_DIR" chown -R fluid:wheel /home/fluid
-
-chmod 755 "$USER_HOME"
-chmod 755 "$USER_HOME/.config"
-chmod 755 "$USER_HOME/.config/wayfire"
-chmod 755 "$USER_HOME/.config/sfwbar"
-
-# ==============================================================================
-# FINISH
-# ==============================================================================
+sh "$DESKTOP_SETUP" "$TARGET_DIR"
 
 log_success "=============================================================="
-log_success "FluidOS features configured successfully."
-log_success "ZFS, Boot Environments, PF, Bonjour and Wayland configured."
-log_success "Wayfire and SFWBar desktop configuration generated."
+log_success "Configuracion de FluidOS terminada."
+log_success "ZFS, PF, Wayland, Wayfire y la shell propia estan preparados."
+log_info "Siguiente paso: ejecutar make-iso.sh."
+log_warn "La compilacion no garantiza por si sola que la ISO arranque; hay que probarla en una maquina virtual."
 log_success "=============================================================="
-
-log_info "Siguiente paso: ejecutar make-iso.sh"
