@@ -1,5 +1,5 @@
 
-name: Construir FluidOS ISO
+name: Construir FluidOS ISO en la Nube
 
 on:
   workflow_dispatch:
@@ -12,17 +12,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Descargar repositorio
+      - name: Preparar archivos del repositorio
         uses: actions/checkout@v4
 
-      - name: Construir FluidOS dentro de FreeBSD 14.2
-        id: build
+      - name: Ejecutar construccion dentro de FreeBSD 14.5
         uses: vmactions/freebsd-vm@v1
         with:
-          release: "14.2"
-          mem: 4096
+          release: '14.5'
+          mem: 4G
+          usesh: true
           sync: rsync
           copyback: true
+
           run: |
             set -e
 
@@ -30,7 +31,9 @@ jobs:
             freebsd-version
             uname -m
 
-            cd "$GITHUB_WORKSPACE"
+            RUTA=$(find "$GITHUB_WORKSPACE" -name "build-os.sh" | head -n 1 | xargs dirname)
+
+            cd "$RUTA"
 
             echo "[INFO] Preparando scripts..."
             sed -i '' 's/\r$//' ./*.sh
@@ -39,13 +42,13 @@ jobs:
             echo "[INFO] Construyendo sistema base..."
             ./build-os.sh
 
-            echo "[INFO] Instalando características de FluidOS..."
+            echo "[INFO] Configurando caracteristicas de FluidOS..."
             ./setup-features.sh
 
-            echo "[INFO] Generando imagen ISO..."
+            echo "[INFO] Generando ISO..."
             ./make-iso.sh
 
-            echo "[INFO] Comprobando ISO..."
+            echo "[INFO] Comprobando imagen ISO..."
             test -s fluidos-14.0-amd64.iso
 
             ls -lh fluidos-14.0-amd64.iso
