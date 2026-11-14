@@ -37,4 +37,5 @@ jobs:
           tag_name: v1.0-beta
           name: FluidOS 1.0 Beta ISO
           files: /tmp/salida/*.iso
+
           
