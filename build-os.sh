@@ -1,45 +1,63 @@
+
 #!/bin/sh
-set -e
+set -eu
+
+# FluidOS: descarga del sistema base oficial de FreeBSD
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Error: Este script debe ejecutarse como root."
+    echo "[ERROR] Ejecuta este script como root."
     exit 1
 fi
 
 ARCH="amd64"
+VER="14.2-RELEASE"
 STAGE_DIR="/usr/obj/fluidos_root"
 CACHE_DIR="/usr/obj/fluidos_cache"
 
-echo "[INFO] Preparando directorios en ${STAGE_DIR}..."
+BASE_URL="https://download.freebsd.org/releases/${ARCH}/${ARCH}/${VER}"
+
+echo "[INFO] Preparando directorios..."
+
 if [ -d "${STAGE_DIR}" ]; then
     chflags -R noschg "${STAGE_DIR}" 2>/dev/null || true
     rm -rf "${STAGE_DIR}"
 fi
+
 mkdir -p "${STAGE_DIR}" "${CACHE_DIR}"
 
-DESCARGADO=0
-for VER in "14.4-RELEASE" "14.3-RELEASE" "15.0-RELEASE" "14.2-RELEASE"; do
-    BASE_URL="https://freebsd.org{ARCH}/${ARCH}/${VER}"
-    echo "[INFO] Probando descarga desde FreeBSD ${VER}..."
-    if fetch -o "${CACHE_DIR}/base.txz" "${BASE_URL}/base.txz" 2>/dev/null; then
-        fetch -o "${CACHE_DIR}/kernel.txz" "${BASE_URL}/kernel.txz"
-        DESCARGADO=1
-        echo "[OK] Descargado correctamente desde ${VER}"
-        break
-    fi
-done
+echo "[INFO] Descargando FreeBSD ${VER}..."
+echo "[INFO] URL: ${BASE_URL}"
 
-if [ "${DESCARGADO}" -eq 0 ]; then
-    echo "[ERROR] No se encontro ninguna version activa en download.freebsd.org"
+if ! fetch -o "${CACHE_DIR}/base.txz" "${BASE_URL}/base.txz"; then
+    echo "[ERROR] No se pudo descargar base.txz"
+    rm -rf "${CACHE_DIR}"
     exit 1
 fi
 
-echo "[INFO] Extrayendo base.txz y kernel.txz..."
+if ! fetch -o "${CACHE_DIR}/kernel.txz" "${BASE_URL}/kernel.txz"; then
+    echo "[ERROR] No se pudo descargar kernel.txz"
+    rm -rf "${CACHE_DIR}"
+    exit 1
+fi
+
+echo "[OK] Descargas completadas."
+
+echo "[INFO] Extrayendo sistema base..."
+
 tar -xpf "${CACHE_DIR}/base.txz" -C "${STAGE_DIR}"
 tar -xpf "${CACHE_DIR}/kernel.txz" -C "${STAGE_DIR}"
 
-cp /etc/resolv.conf "${STAGE_DIR}/etc/resolv.conf" 2>/dev/null || echo "nameserver 1.1.1.1" > "${STAGE_DIR}/etc/resolv.conf"
+echo "[INFO] Configurando FluidOS..."
+
+mkdir -p "${STAGE_DIR}/etc"
+
+if [ -f /etc/resolv.conf ]; then
+    cp /etc/resolv.conf "${STAGE_DIR}/etc/resolv.conf"
+fi
+
 echo "FluidOS 1.0" > "${STAGE_DIR}/etc/motd"
+
 rm -rf "${CACHE_DIR}"
 
-echo "[OK] Sistema base de FluidOS listo en ${STAGE_DIR}"
+echo "[OK] Sistema base preparado."
+echo "[OK] Directorio: ${STAGE_DIR}"
