@@ -98,6 +98,14 @@ jobs:
 
           COMPRESSED="fluidos-14.0-amd64.iso.xz"
 
+          if [ ! -s "$COMPRESSED" ]; then
+            echo "[ERROR] No se pudo generar el archivo comprimido."
+            exit 1
+          fi
+
+          echo "[INFO] Eliminando ISO original..."
+          rm -f fluidos-14.0-amd64.iso
+
           SIZE=$(stat -c%s "$COMPRESSED")
           LIMIT=2147483648
 
@@ -116,7 +124,7 @@ jobs:
               "$COMPRESSED" \
               "$COMPRESSED.part"
 
-            rm "$COMPRESSED"
+            rm -f "$COMPRESSED"
 
           else
 
@@ -145,6 +153,7 @@ jobs:
           if [ -f "fluidos-14.0-amd64.iso.xz" ]; then
 
             echo "[INFO] Comprobando SHA256..."
+
             sha256sum -c fluidos-14.0-amd64.iso.xz.sha256
 
           else
@@ -158,7 +167,7 @@ jobs:
               <(sed "s|fluidos-14.0-amd64.iso.xz|/tmp/fluidos-check.iso.xz|" \
               fluidos-14.0-amd64.iso.xz.sha256)
 
-            rm /tmp/fluidos-check.iso.xz
+            rm -f /tmp/fluidos-check.iso.xz
 
           fi
 
