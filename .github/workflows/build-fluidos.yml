@@ -12,8 +12,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # 1. PREPARAR REPOSITORIO
+      # ============================================================
+
       - name: Preparar archivos del repositorio
         uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. CONSTRUIR FLUIDOS EN FREEBSD
+      # ============================================================
 
       - name: Ejecutar construccion dentro de FreeBSD 14.5
         uses: vmactions/freebsd-vm@v1
@@ -31,7 +39,9 @@ jobs:
             freebsd-version
             uname -m
 
-            RUTA=$(find "$GITHUB_WORKSPACE" -name "build-os.sh" | head -n 1 | xargs dirname)
+            RUTA=$(find "$GITHUB_WORKSPACE" \
+              -name "build-os.sh" \
+              -print -quit | xargs dirname)
 
             cd "$RUTA"
 
@@ -42,7 +52,7 @@ jobs:
             echo "[INFO] Construyendo sistema base..."
             ./build-os.sh
 
-            echo "[INFO] Configurando caracteristicas de FluidOS..."
+            echo "[INFO] Configurando caracteristicas..."
             ./setup-features.sh
 
             echo "[INFO] Generando ISO..."
@@ -52,6 +62,10 @@ jobs:
             test -s fluidos-14.0-amd64.iso
 
             ls -lh fluidos-14.0-amd64.iso
+
+      # ============================================================
+      # 3. COMPRIMIR Y PREPARAR ISO
+      # ============================================================
 
       - name: Comprimir y preparar ISO para distribucion
         shell: bash
@@ -65,7 +79,11 @@ jobs:
             -name "fluidos-14.0-amd64.iso" \
             -print -quit)
 
-          test -n "$ISO"
+          if [ -z "$ISO" ]; then
+            echo "[ERROR] No se encontro la ISO."
+            exit 1
+          fi
+
           test -s "$ISO"
 
           mkdir -p "$GITHUB_WORKSPACE/release-assets"
@@ -86,11 +104,13 @@ jobs:
           echo "[INFO] Tamaño comprimido: $SIZE bytes"
 
           echo "[INFO] Generando SHA256..."
+
           sha256sum "$COMPRESSED" > "$COMPRESSED.sha256"
 
           if [ "$SIZE" -ge "$LIMIT" ]; then
+
             echo "[INFO] La ISO comprimida supera 2 GiB."
-            echo "[INFO] Dividiendo en partes compatibles con GitHub..."
+            echo "[INFO] Dividiendo automaticamente..."
 
             split -b 1900M -d -a 3 \
               "$COMPRESSED" \
@@ -99,23 +119,69 @@ jobs:
             rm "$COMPRESSED"
 
           else
-            echo "[SUCCESS] ISO comprimida compatible con GitHub."
+
+            echo "[SUCCESS] ISO compatible con GitHub Releases."
+
           fi
 
           echo "[INFO] Archivos preparados:"
           ls -lh
 
+      # ============================================================
+      # 4. VERIFICAR ARCHIVOS
+      # ============================================================
+
+      - name: Verificar archivos de distribucion
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE/release-assets"
+
+          echo "[INFO] Comprobando archivos..."
+
+          test -f "fluidos-14.0-amd64.iso.xz.sha256"
+
+          if [ -f "fluidos-14.0-amd64.iso.xz" ]; then
+
+            echo "[INFO] Comprobando SHA256..."
+            sha256sum -c fluidos-14.0-amd64.iso.xz.sha256
+
+          else
+
+            echo "[INFO] ISO dividida en partes."
+
+            cat fluidos-14.0-amd64.iso.xz.part* \
+              > /tmp/fluidos-check.iso.xz
+
+            sha256sum -c \
+              <(sed "s|fluidos-14.0-amd64.iso.xz|/tmp/fluidos-check.iso.xz|" \
+              fluidos-14.0-amd64.iso.xz.sha256)
+
+            rm /tmp/fluidos-check.iso.xz
+
+          fi
+
+          echo "[SUCCESS] Verificacion completada."
+
+      # ============================================================
+      # 5. PUBLICAR EN GITHUB RELEASES
+      # ============================================================
+
       - name: Publicar FluidOS en GitHub Releases
         uses: softprops/action-gh-release@v2
 
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
           tag_name: v1.0-beta
           name: FluidOS 1.0 Beta
 
           generate_release_notes: true
+          overwrite_files: true
 
           body: |
-            # FluidOS Beta
+            # FluidOS 1.0 Beta
 
             Primera compilacion distribuible de FluidOS.
 
@@ -123,21 +189,19 @@ jobs:
 
             Descarga el archivo ISO.XZ.
 
-            Si la descarga está dividida en partes:
+            Si existen partes:
             1. Descarga todas las partes.
             2. Unelas en orden numerico.
-            3. Descomprime el archivo resultante con XZ.
-            4. Verifica el SHA256.
+            3. Recupera el archivo ISO.XZ.
+            4. Descomprime utilizando XZ.
 
             ## Verificacion
 
-            Se incluye un archivo SHA256 para comprobar
-            la integridad de la imagen.
+            Utiliza el archivo SHA256 para comprobar
+            la integridad de la descarga.
 
           files: |
-            release-assets/fluidos-*.iso.xz
-            release-assets/fluidos-*.iso.xz.part*
-            release-assets/fluidos-*.iso.xz.sha256
+            release-assets/*
 
           fail_on_unmatched_files: true
           
